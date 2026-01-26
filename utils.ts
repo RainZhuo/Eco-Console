@@ -37,10 +37,9 @@ export const calculateBuybackRate = (dailyNewWealth: number): number => {
   const range = maxRate - minRate;
   
   // Calibrating the sigmoid curve
-  // Assuming a "healthy" server day generates ~50 items (50 * 286 = 14300 wealth)
-  // We want the midpoint to be around there.
-  const midpoint = 15000; 
-  const steepness = 0.0003; 
+  // Updated to 500,000 per user request to handle server-wide scale (100 bots * 5000 wealth)
+  const midpoint = 500000; 
+  const steepness = 0.000005; // Adjusted steepness for the larger x-axis scale
 
   // Standard Sigmoid: 1 / (1 + e^-x)
   const sigmoidValue = 1 / (1 + Math.exp(-steepness * (dailyNewWealth - midpoint)));

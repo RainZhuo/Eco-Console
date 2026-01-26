@@ -40,6 +40,8 @@ export interface DailyLog {
   totalWealth: number;
   newWealth: number;
   stakingApy?: number; // Visualizing staking returns
+  botActivity?: number; // Multiplier of bot activity
+  botRoi?: number; // Calculated ROI for bots
 }
 
 // Config Constants

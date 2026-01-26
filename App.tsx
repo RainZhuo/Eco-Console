@@ -3,24 +3,68 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, Legend, ResponsiveContainer, AreaChart, Area, BarChart, Bar, ComposedChart 
 } from 'recharts';
 import { 
-  Coins, Box, Hammer, TrendingUp, RefreshCw, Archive, Activity, DollarSign, Database, Lock, Unlock, Gift, Users 
+  Coins, Box, Hammer, TrendingUp, RefreshCw, Archive, Activity, DollarSign, Database, Lock, Unlock, Gift, Users, Gauge, TrendingDown, Zap 
 } from 'lucide-react';
 import { AMMState, GlobalState, PlayerState, DailyLog, CONFIG } from './types';
 import { calculateBuybackRate, formatNumber, getAmountOut } from './utils';
 import { InfoCard } from './components/InfoCard';
 
-// Helper to simulate bot activity for a day
-const generateBotActivity = () => {
-    // Random fluctuation
-    const volatility = () => 0.8 + Math.random() * 0.4;
-    
-    const newWealth = Math.floor(CONFIG.SIM_OTHERS_COUNT * CONFIG.SIM_OTHERS_DAILY_WEALTH_AVG * volatility());
-    const newMedals = Math.floor(CONFIG.SIM_OTHERS_COUNT * CONFIG.SIM_OTHERS_MEDAL_INVEST_AVG * volatility());
-    
-    // Note: Bot staking is now handled in advanceDay based on rewards.
-    // We assume 0 external capital staking in this simplified model.
-    const stakeIncrease = 0; 
+interface BotDecisionContext {
+    currentPrice: number;
+    lastPrice: number;
+    lastApy: number;
+}
 
+// Helper to simulate bot activity for a day with "Smart" logic
+const generateBotActivity = (context?: BotDecisionContext) => {
+    let activityMultiplier = 1.0;
+    let computedRoi = 0;
+    
+    // Smart Logic: Only apply if context is provided (after Day 1)
+    if (context) {
+        // 1. Calculate Expected ROI
+        // Cost Basis:
+        // Avg Wealth (5000) ~= 17.5 items. 
+        // Craft Cost = 17.5 * CONFIG.CRAFT_COST
+        // Chest Cost = (5000/100) * CONFIG.CHEST_OPEN_COST = 50 * 10 = 500
+        // Total Cost ~= 17.5 * 300 + 500 = 5250 + 500 = 5750 LvMON
+        const avgItems = CONFIG.SIM_OTHERS_DAILY_WEALTH_AVG / CONFIG.WEALTH_PER_ITEM;
+        const avgChests = CONFIG.SIM_OTHERS_DAILY_WEALTH_AVG / 100;
+        const totalCost = (avgItems * CONFIG.CRAFT_COST) + (avgChests * CONFIG.CHEST_OPEN_COST);
+        
+        // Revenue Basis:
+        // Avg Medals = 50 chests * 10 = 500 medals.
+        // Pool Share assumption: 100 bots * 500 = 50000 medals total.
+        // Share = 500 / 50000 = 1%.
+        // Reward = 1M MEME * 1% = 10,000 MEME.
+        // Value = 10,000 * Price.
+        const estMedals = avgChests * 10;
+        // Estimate total pool as if everyone is normal (simplified expectation)
+        const estTotalPool = (CONFIG.SIM_OTHERS_COUNT * CONFIG.SIM_OTHERS_MEDAL_INVEST_AVG) + 100; 
+        const share = estMedals / estTotalPool;
+        const estRewardMeme = CONFIG.DAILY_MEME_REWARD * share;
+        const estRevenue = estRewardMeme * context.currentPrice;
+
+        computedRoi = estRevenue / totalCost;
+
+        // Decision: Adjust Activity based on ROI
+        // ROI < 0.5 -> Deep Freeze (0.2x activity)
+        // ROI > 2.0 -> FOMO (2.5x activity)
+        if (computedRoi < 0.5) activityMultiplier = 0.2;
+        else if (computedRoi < 0.9) activityMultiplier = 0.5;
+        else if (computedRoi > 3.0) activityMultiplier = 3.0;
+        else if (computedRoi > 1.5) activityMultiplier = 1.5;
+        else activityMultiplier = 1.0;
+    }
+
+    // Random fluctuation on top of decision
+    const volatility = () => (0.9 + Math.random() * 0.2);
+    
+    const finalMultiplier = activityMultiplier * volatility();
+
+    const newWealth = Math.floor(CONFIG.SIM_OTHERS_COUNT * CONFIG.SIM_OTHERS_DAILY_WEALTH_AVG * finalMultiplier);
+    const newMedals = Math.floor(CONFIG.SIM_OTHERS_COUNT * CONFIG.SIM_OTHERS_MEDAL_INVEST_AVG * finalMultiplier);
+    
     // Calculate Costs incurred by bots (entering Reservoir)
     // 1. Crafting Cost (50% to reservoir)
     const itemsCrafted = newWealth / CONFIG.WEALTH_PER_ITEM;
@@ -29,7 +73,6 @@ const generateBotActivity = () => {
 
     // 2. Chest Open Cost (100% to reservoir)
     // Approx medals per chest = 10 (Avg of 5-15).
-    // Logic: Bots open enough chests to get 'newMedals'.
     const chestsOpened = newMedals / 10;
     const chestCost = chestsOpened * CONFIG.CHEST_OPEN_COST;
     const reservoirFromChest = chestCost;
@@ -37,8 +80,9 @@ const generateBotActivity = () => {
     return {
         wealth: newWealth,
         medals: newMedals,
-        stakeIncrease: stakeIncrease,
-        reservoirInput: reservoirFromCraft + reservoirFromChest
+        reservoirInput: reservoirFromCraft + reservoirFromChest,
+        multiplier: finalMultiplier,
+        roi: computedRoi
     };
 };
 
@@ -51,7 +95,7 @@ export default function App() {
     totalWealth: 0,
     dailyNewWealth: 0,
     medalsInPool: 0,
-    totalStakedMeme: 500000, // Initial simulated stake from others
+    totalStakedMeme: 500000, 
   });
 
   const [amm, setAmm] = useState<AMMState>({
@@ -89,6 +133,7 @@ export default function App() {
   // --- Effect: Day 1 Initialization ---
   useEffect(() => {
     if (!hasInitializedDay1.current) {
+        // Day 1 has no context, neutral bots
         const bots = generateBotActivity();
         setGlobal(prev => ({
             ...prev,
@@ -96,8 +141,23 @@ export default function App() {
             totalWealth: prev.totalWealth + bots.wealth,
             medalsInPool: bots.medals,
             reservoirLvMON: prev.reservoirLvMON + bots.reservoirInput,
-            totalStakedMeme: prev.totalStakedMeme + bots.stakeIncrease
+            totalStakedMeme: prev.totalStakedMeme
         }));
+        
+        // Initial log
+        setHistory([{
+            day: 1,
+            memePrice: CONFIG.INITIAL_AMM_LVMON / CONFIG.INITIAL_AMM_MEME,
+            reservoirBalance: bots.reservoirInput,
+            buybackAmount: 0,
+            buybackRate: 0.02,
+            totalWealth: bots.wealth,
+            newWealth: bots.wealth,
+            stakingApy: 0,
+            botActivity: 1.0,
+            botRoi: 1.0
+        }]);
+
         hasInitializedDay1.current = true;
     }
   }, []);
@@ -109,9 +169,8 @@ export default function App() {
     if (player.lvMON < cost) return alert("LvMON 不足！");
 
     const wealthGain = CONFIG.WEALTH_PER_ITEM * craftBatchSize;
-    const toReservoir = cost * 0.5; // 50% to Reservoir
+    const toReservoir = cost * 0.5; 
 
-    // Calculate immediate chests for the new equipment
     const instantChests = Math.floor(wealthGain / 100);
 
     setPlayer(prev => ({
@@ -135,7 +194,6 @@ export default function App() {
     const cost = CONFIG.CHEST_OPEN_COST * openChestBatchSize;
     if (player.lvMON < cost) return alert("开启宝箱所需的 LvMON 不足！");
 
-    // Calculate medals (random 5-15)
     let totalMedalsWon = 0;
     for (let i = 0; i < openChestBatchSize; i++) {
       totalMedalsWon += Math.floor(Math.random() * (CONFIG.MEDAL_MAX - CONFIG.MEDAL_MIN + 1)) + CONFIG.MEDAL_MIN;
@@ -150,7 +208,7 @@ export default function App() {
 
     setGlobal(prev => ({
       ...prev,
-      reservoirLvMON: prev.reservoirLvMON + cost, // 100% to reservoir
+      reservoirLvMON: prev.reservoirLvMON + cost, 
     }));
   };
 
@@ -222,7 +280,6 @@ export default function App() {
   };
 
   // --- Claiming Logic ---
-
   const claimPoolReward = () => {
     if (player.unclaimedPoolReward <= 0) return;
     const reward = player.unclaimedPoolReward * 0.9; // 10% tax
@@ -264,14 +321,37 @@ export default function App() {
         othersPendingReward = CONFIG.DAILY_MEME_REWARD * (1 - playerShare);
     }
 
-    // B. Bot Logic: Tax, Stake, Sell (Simulate Others)
-    // 1. Tax (10% stays in system/distributed to player)
+    // B. Smart Bot Logic: Tax, Stake, Sell
     const taxRate = 0.1;
     const botTax = othersPendingReward * taxRate; 
     const botNetReward = othersPendingReward - botTax;
 
-    // 2. Stake vs Sell
-    const botStakeRatio = 0.3; // Bots stake 30% of their rewards
+    // --- Dynamic Staking & Selling Strategy ---
+    const lastLog = history[history.length - 1];
+    const lastApy = lastLog?.stakingApy || 0;
+    const lastPrice = lastLog?.memePrice || currentPrice;
+    
+    // Base Ratio
+    let botStakeRatio = 0.3; 
+    
+    // APY Feedback Loop (Greed for Yield)
+    if (lastApy > 2.0) botStakeRatio = 0.8; // APY > 200%, Stake heavy
+    else if (lastApy > 0.5) botStakeRatio = 0.5; // APY > 50%, Stake more
+    else if (lastApy < 0.05) botStakeRatio = 0.1; // APY < 5%, Unstake/Low stake
+
+    // Trend Feedback Loop (Fear/Greed for Selling)
+    let botSellRatio = 1 - botStakeRatio;
+    const priceTrend = currentPrice > lastPrice ? 'up' : (currentPrice < lastPrice ? 'down' : 'flat');
+    
+    if (priceTrend === 'down') {
+        // Panic: Sell everything liquid
+        // (No change to ratio needed if ratio defines liquid portion, but logic conceptually matches)
+    } else if (priceTrend === 'up') {
+        // HODL: Reduce selling pressure, hold some liquid?
+        // For simplicity, we assume bots either Stake or Sell. 
+        // We could add a "Hold Liquid" state, but to keep liquidity flowing, we'll keep Stake/Sell binary for now.
+    }
+
     const botStakedAmount = botNetReward * botStakeRatio;
     const botSellAmount = botNetReward - botStakedAmount;
 
@@ -280,13 +360,12 @@ export default function App() {
     let tempReserveLvMON = amm.reserveLvMON;
     
     if (botSellAmount > 0) {
-        // AMM Swap: Input MEME -> Output LvMON
         const lvMONOut = getAmountOut(botSellAmount, tempReserveMEME, tempReserveLvMON);
         tempReserveMEME += botSellAmount;
         tempReserveLvMON -= lvMONOut;
     }
 
-    // D. Buyback Calculation (Using updated reserves)
+    // D. Buyback Calculation
     const currentBuybackRate = calculateBuybackRate(global.dailyNewWealth);
     const buybackBudget = global.reservoirLvMON * currentBuybackRate;
     
@@ -294,7 +373,6 @@ export default function App() {
     let stakingDividend = 0;
 
     if (buybackBudget > 0) {
-        // AMM Swap: Input LvMON -> Output MEME
         const memeBought = getAmountOut(buybackBudget, tempReserveLvMON, tempReserveMEME);
         tempReserveLvMON += buybackBudget;
         tempReserveMEME -= memeBought;
@@ -309,14 +387,21 @@ export default function App() {
         playerStakingShare = stakingDividend * (player.stakedMeme / global.totalStakedMeme);
     }
     
-    // Update total staked with the new bot amount for *next* cycle
     const newTotalStakedMeme = global.totalStakedMeme + botStakedAmount;
 
-    // F. Redistribution (Tax from others goes to player)
+    // F. Redistribution
     const playerRedistributionShare = botTax / (CONFIG.SIM_OTHERS_COUNT + 1);
-
-    // G. Daily Grant (Chests)
     const newChests = Math.floor(player.wealth / 100);
+
+    // === 2. SIMULATE NEXT DAY ACTIVITY (Start of Day) ===
+    // Use current stats to determine next day's production
+    const botContext: BotDecisionContext = {
+        currentPrice: tempReserveLvMON / tempReserveMEME,
+        lastPrice: currentPrice, // Price before today's settlement
+        lastApy: stakingDividend * 365 / Math.max(1, global.totalStakedMeme) // Current implied APY
+    };
+
+    const nextDayBots = generateBotActivity(botContext);
 
     // H. Log History
     const log: DailyLog = {
@@ -327,12 +412,11 @@ export default function App() {
         buybackRate: currentBuybackRate,
         totalWealth: global.totalWealth,
         newWealth: global.dailyNewWealth,
-        stakingApy: global.totalStakedMeme > 0 ? (stakingDividend * 365 / global.totalStakedMeme) : 0
+        stakingApy: global.totalStakedMeme > 0 ? (stakingDividend * 365 / global.totalStakedMeme) : 0,
+        botActivity: nextDayBots.multiplier,
+        botRoi: nextDayBots.roi
     };
     setHistory(prev => [...prev, log]);
-
-    // === 2. SIMULATE NEXT DAY ACTIVITY (Start of Day) ===
-    const nextDayBots = generateBotActivity();
 
     // === 3. UPDATE STATES ===
     
@@ -345,7 +429,7 @@ export default function App() {
     setPlayer(prev => ({
         ...prev,
         chests: prev.chests + newChests,
-        investedMedals: 0, // Reset daily
+        investedMedals: 0, 
         unclaimedPoolReward: prev.unclaimedPoolReward + playerPendingReward,
         unclaimedRedistribution: prev.unclaimedRedistribution + playerRedistributionShare,
         unclaimedStakingReward: prev.unclaimedStakingReward + playerStakingShare
@@ -354,12 +438,11 @@ export default function App() {
     setGlobal(prev => ({
         ...prev,
         day: prev.day + 1,
-        // New Reservoir = Old - Buyback + New Bot Inputs
         reservoirLvMON: (prev.reservoirLvMON - actualBuybackAmount) + nextDayBots.reservoirInput,
         dailyNewWealth: nextDayBots.wealth, 
         medalsInPool: nextDayBots.medals, 
         totalWealth: prev.totalWealth + nextDayBots.wealth,
-        totalStakedMeme: newTotalStakedMeme + nextDayBots.stakeIncrease
+        totalStakedMeme: newTotalStakedMeme 
     }));
   };
 
@@ -370,11 +453,13 @@ export default function App() {
     if (isAuto) {
       interval = setInterval(() => {
          advanceDay();
-      }, 1500);
+      }, 1000); // Speed up slightly
     }
     return () => clearInterval(interval);
   }, [isAuto, global, amm, player]); 
 
+  const lastLog = history[history.length - 1];
+  const botSentiment = !lastLog ? "Neutral" : (lastLog.botRoi || 0) > 1.2 ? "FOMO (Greed)" : (lastLog.botRoi || 0) < 0.8 ? "Fear (Freeze)" : "Stable";
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans p-6">
@@ -386,7 +471,7 @@ export default function App() {
             MMORPG 经济系统控制台
           </h1>
           <p className="text-slate-400 mt-1 flex items-center gap-2">
-            <Users size={16} /> 模拟器：1 名真实玩家 + {CONFIG.SIM_OTHERS_COUNT} 名模拟玩家在线
+            <Users size={16} /> 模拟器：1 名真实玩家 + {CONFIG.SIM_OTHERS_COUNT} 名智能机器人
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -634,6 +719,29 @@ export default function App() {
                     icon={<RefreshCw size={24}/>}
                 />
             </div>
+            
+            {/* Sentiment Dashboard */}
+             <div className="bg-slate-800 p-5 rounded-lg border border-slate-700 shadow-lg">
+                <h3 className="text-md font-bold text-white mb-4 flex items-center gap-2">
+                    <Zap size={20} className="text-yellow-400" /> 市场情绪监控
+                </h3>
+                <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-slate-900 p-3 rounded">
+                        <div className="text-xs text-slate-400">机器人情绪</div>
+                        <div className={`text-lg font-bold ${botSentiment.includes("FOMO") ? "text-green-400" : botSentiment.includes("Fear") ? "text-red-400" : "text-blue-400"}`}>
+                            {botSentiment}
+                        </div>
+                    </div>
+                    <div className="bg-slate-900 p-3 rounded">
+                        <div className="text-xs text-slate-400">搬砖 ROI</div>
+                        <div className="text-lg font-mono text-white">{(lastLog?.botRoi || 0).toFixed(2)}x</div>
+                    </div>
+                     <div className="bg-slate-900 p-3 rounded">
+                        <div className="text-xs text-slate-400">活跃度倍率</div>
+                        <div className="text-lg font-mono text-white">{(lastLog?.botActivity || 0).toFixed(2)}x</div>
+                    </div>
+                </div>
+            </div>
 
             {/* Chart 1: Price & Reservoir */}
             <div className="bg-slate-800 p-5 rounded-lg border border-slate-700 shadow-lg">
@@ -657,7 +765,7 @@ export default function App() {
                 </div>
             </div>
 
-            {/* Chart 2: Buyback & Staking */}
+            {/* Chart 2: Buyback & Activity */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                  <div className="bg-slate-800 p-5 rounded-lg border border-slate-700 shadow-lg">
                     <h3 className="text-md font-bold text-white mb-4">回购分配 (90%销毁 / 10%质押)</h3>
@@ -675,15 +783,15 @@ export default function App() {
                 </div>
 
                 <div className="bg-slate-800 p-5 rounded-lg border border-slate-700 shadow-lg">
-                    <h3 className="text-md font-bold text-white mb-4">Sigmoid 调节 (财富增量 vs 回购率)</h3>
+                    <h3 className="text-md font-bold text-white mb-4">机器人活跃度 (基于ROI)</h3>
                     <div className="h-48 w-full">
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={history}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                                 <XAxis dataKey="day" stroke="#94a3b8" />
-                                <YAxis domain={[0, 0.1]} stroke="#94a3b8" tickFormatter={(v) => `${(v*100).toFixed(0)}%`} />
+                                <YAxis domain={[0, 4]} stroke="#94a3b8" />
                                 <ReTooltip contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }} />
-                                <Line type="monotone" dataKey="buybackRate" stroke="#fbbf24" strokeWidth={2} name="回购率" />
+                                <Line type="monotone" dataKey="botActivity" stroke="#34d399" strokeWidth={2} name="活跃倍率" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -694,10 +802,9 @@ export default function App() {
             <div className="bg-slate-800/50 p-4 rounded text-sm text-slate-400 border border-slate-700">
                 <h4 className="font-bold text-white mb-2 flex items-center gap-2"><Database size={14}/> 系统机制更新</h4>
                 <ul className="list-disc list-inside space-y-1">
-                    <li><strong className="text-blue-400">时间流速：</strong> 每日开始时，已预先模拟全服（机器人）的制作与勋章投入。您看到的奖池是包含机器人投入后的总量。</li>
-                    <li><strong className="text-purple-400">机器人行为：</strong> 每日结算时，机器人会领取奖励，将部分 MEME 质押，剩余 MEME 全部卖向交易池（产生抛压）。</li>
-                    <li><strong className="text-pink-400">自动回购：</strong> 随后系统根据今日全服财富增量，使用蓄水池资金回购 MEME 并销毁（90%）或分红（10%）。</li>
-                    <li><strong className="text-red-400">纳税机制：</strong> 机器人领奖时产生的 10% 纳税额会进入“他人纳税分红”池，供您领取。</li>
+                    <li><strong className="text-blue-400">Sigmoid 修正：</strong> 回购中点已调整至 50万财富值，现在回购率会动态变化，不再锁死 8%。</li>
+                    <li><strong className="text-purple-400">智能机器人：</strong> 引入了 ROI 计算。如果做装备亏本，机器人会大幅减少产量（活跃度下降）；如果暴利，会开启 FOMO 模式。</li>
+                    <li><strong className="text-pink-400">追涨杀跌：</strong> 机器人会根据 APY 动态调整质押比例。APY 高时锁仓，MEME 价格下跌时恐慌抛售。</li>
                 </ul>
             </div>
 
