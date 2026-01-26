@@ -1,0 +1,5 @@
+{
+  "name": "MMO 经济系统模拟",
+  "description": "一个 MMORPG 经济系统的模拟仪表盘，包含 Uniswap 风格的 AMM、动态回购销毁机制和奖励分配分析。",
+  "requestFramePermissions": []
+}
