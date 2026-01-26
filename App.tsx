@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, Legend, ResponsiveContainer, AreaChart, Area, BarChart, Bar, ComposedChart 
 } from 'recharts';
 import { 
-  Coins, Box, Hammer, TrendingUp, RefreshCw, Archive, Activity, DollarSign, Database, Lock, Unlock, Gift, Users, Gauge, TrendingDown, Zap, Flame 
+  Coins, Box, Hammer, TrendingUp, RefreshCw, Archive, Activity, DollarSign, Database, Lock, Unlock, Gift, Users, Gauge, TrendingDown, Zap, Flame, Download 
 } from 'lucide-react';
 import { AMMState, GlobalState, PlayerState, DailyLog, CONFIG } from './types';
 import { calculateBuybackRate, formatNumber, getAmountOut } from './utils';
@@ -14,6 +15,7 @@ interface BotDecisionContext {
     lastPrice: number;
     lastApy: number;
     totalWealth: number;
+    medalsInPool: number; // Optimization: Pass real pool size for better estimation
 }
 
 // Helper to simulate bot activity for a day with "Smart" logic
@@ -25,10 +27,13 @@ const generateBotActivity = (context?: BotDecisionContext) => {
     // Smart Logic: Only apply if context is provided (after Day 1)
     if (context) {
         // --- 1. Dilution & Revenue Estimation ---
-        // Total Medals comes from Total Wealth.
-        // Formula: TotalWealth / 100 (Chests) * 10 (Medals/Chest) = TotalWealth / 10
-        // We use the CURRENT TotalWealth to estimate the pool size for the NEXT day.
-        const estimatedTotalMedals = Math.max(100, context.totalWealth / 10);
+        // Optimization 1: Dynamic ROI Calculation
+        // Instead of a static heuristic (Wealth/10), we use the actual medals in pool from the previous day
+        // to estimate the competition level. If pool is empty (Day 1), fallback to heuristic.
+        const currentPoolSize = context.medalsInPool > 0 ? context.medalsInPool : Math.max(100, context.totalWealth / 10);
+        
+        // We use the current pool size as the baseline estimate for the NEXT day
+        const estimatedTotalMedals = currentPoolSize;
         
         // Reward per Medal = DailyPool / TotalMedals
         const rewardPerMedal = CONFIG.DAILY_MEME_REWARD / estimatedTotalMedals;
@@ -176,6 +181,21 @@ export default function App() {
   }, []);
   
   // --- Actions ---
+
+  const handleExportHistory = () => {
+      if (history.length === 0) {
+          alert("暂无历史数据可导出");
+          return;
+      }
+      
+      const ws = XLSX.utils.json_to_sheet(history);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Simulation History");
+      
+      // Generate filename with current day
+      const filename = `mmo_economy_history_day${global.day}.xlsx`;
+      XLSX.writeFile(wb, filename);
+  };
 
   const craftEquipment = () => {
     const cost = CONFIG.CRAFT_COST * craftBatchSize;
@@ -359,25 +379,63 @@ export default function App() {
     const botTax = othersPendingReward * taxRate; 
     const botNetReward = othersPendingReward - botTax;
 
-    // --- Dynamic Staking & Selling Strategy ---
+    // --- Optimization 2: Integrated Staking Logic (APY + ROI) ---
     const lastLog = history[history.length - 1];
     const lastApy = lastLog?.stakingApy || 0;
+    const lastRoi = lastLog?.botRoi || 0; // Get previous ROI sentiment
     const lastPrice = lastLog?.memePrice || currentPrice;
     
     // Base Ratio
-    let botStakeRatio = 0.1; 
+    const baseStakeRatio = 0.1; 
+    let botStakeRatio = 0;
     
-    // APY Feedback Loop (Greed for Yield)
-    if (lastApy > 2.0) botStakeRatio = 0.2; // APY > 200%, Stake heavy
-    else if (lastApy > 0.5) botStakeRatio = 0.15; // APY > 50%, Stake more
-    else if (lastApy < 0.05) botStakeRatio = 0.05; // APY < 5%, Unstake/Low stake
+    // Critical Fix: Unstaking Logic
+    // If APY is very low, bots should unstake (negative ratio)
+    // Updated threshold: 10.0 (1000% APY)
+    if (lastApy < 10.0) { 
+        botStakeRatio = -0.1;
+    } else {
+        // Normal Staking Logic
+        // Factor 1: APY (Yield Greed)
+        let apyMultiplier = 1.0;
+        if (lastApy > 2.0) apyMultiplier = 2.0;      // > 200% APY
+        else if (lastApy > 0.5) apyMultiplier = 1.5; // > 50% APY
+        
+        // Factor 2: ROI Sentiment (Market Confidence)
+        // If ROI is bad, bots should be fearful and prefer liquidity over staking
+        let sentimentMultiplier = 1.0;
+        if (lastRoi > 0.05) sentimentMultiplier = 1.5;   // FOMO: High ROI -> Stake more to hold
+        else if (lastRoi < 0) sentimentMultiplier = 0.5; // Fear: Negative ROI -> Liquidate/Don't stake
 
-    // Trend Feedback Loop (Fear/Greed for Selling)
-    let botSellRatio = 1 - botStakeRatio;
-    const priceTrend = currentPrice > lastPrice ? 'up' : (currentPrice < lastPrice ? 'down' : 'flat');
+        // Calculate final ratio
+        botStakeRatio = baseStakeRatio * apyMultiplier * sentimentMultiplier;
+
+        // Safety Bounds (0% to 60%)
+        botStakeRatio = Math.max(0, Math.min(0.6, botStakeRatio));
+    }
+
+    // Trend Feedback for Selling is handled by the inverse (what isn't staked is sold)
     
-    const botStakedAmount = botNetReward * botStakeRatio;
-    const botSellAmount = botNetReward - botStakedAmount;
+    let botStakedAmount = 0;
+    let botSellAmount = 0;
+
+    if (botStakeRatio >= 0) {
+        // Positive Ratio: Stake a portion of NEW rewards
+        botStakedAmount = botNetReward * botStakeRatio;
+        // The rest is sold
+        botSellAmount = botNetReward - botStakedAmount;
+    } else {
+        // Negative Ratio: Unstaking Mode
+        // 1. Sell ALL new rewards (StakedAmount from reward is 0)
+        // 2. Unstake additional amount based on magnitude of ratio relative to reward flow (proxy for urgency)
+        const unstakeMagnitude = botNetReward * Math.abs(botStakeRatio);
+        
+        // Cannot unstake more than what exists in the pool (simulation approximation)
+        const actualUnstake = Math.min(unstakeMagnitude, global.totalStakedMeme);
+        
+        botStakedAmount = -actualUnstake; // Negative value reduces the pool
+        botSellAmount = botNetReward + actualUnstake; // Sell new reward + unstaked amount
+    }
 
     // C. Execute Bot Sell on AMM (Before buyback)
     let tempReserveMEME = amm.reserveMEME;
@@ -413,7 +471,8 @@ export default function App() {
         playerStakingShare = stakingDividend * (player.stakedMeme / global.totalStakedMeme);
     }
     
-    const newTotalStakedMeme = global.totalStakedMeme + botStakedAmount;
+    // Update Total Staked Meme (Ensure it doesn't go below 0)
+    const newTotalStakedMeme = Math.max(0, global.totalStakedMeme + botStakedAmount);
 
     // F. Redistribution
     const playerTotalUnclaimed = player.unclaimedPoolReward + playerPendingReward;
@@ -439,7 +498,8 @@ export default function App() {
         currentPrice: tempReserveLvMON / tempReserveMEME,
         lastPrice: currentPrice,
         lastApy: stakingDividend * 365 / Math.max(1, global.totalStakedMeme),
-        totalWealth: global.totalWealth // Passing Total Wealth for Dilution Calc
+        totalWealth: global.totalWealth, // Passing Total Wealth for Dilution Calc
+        medalsInPool: global.medalsInPool // Optimization 1: Pass Real Pool Size
     };
 
     const nextDayBots = generateBotActivity(botContext);
@@ -534,6 +594,16 @@ export default function App() {
                 <div className="text-xs text-slate-500 uppercase">当前天数</div>
                 <div className="text-2xl font-mono font-bold text-white">Day {global.day}</div>
              </div>
+             
+             {/* Export Button */}
+             <button 
+                onClick={handleExportHistory}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded font-bold flex items-center gap-2 transition-colors border border-slate-600"
+                title="导出历史数据"
+             >
+                <Download size={18} /> 
+             </button>
+
              <button 
                 onClick={() => setIsAuto(!isAuto)}
                 className={`px-4 py-2 rounded font-bold transition-colors ${isAuto ? 'bg-red-500 hover:bg-red-600' : 'bg-green-600 hover:bg-green-700'}`}
@@ -704,7 +774,10 @@ export default function App() {
                                 <h2 className="text-sm font-bold flex items-center gap-2 text-white">
                                     <Lock size={16} className="text-pink-400"/> MEME 质押
                                 </h2>
-                                <span className="text-xs text-slate-400">全服：{formatNumber(global.totalStakedMeme)}</span>
+                                <div className="text-right">
+                                     <div className="text-xs text-slate-400">全服: {formatNumber(global.totalStakedMeme)}</div>
+                                     <div className="text-xs font-mono text-pink-400">APY: {((lastLog?.stakingApy || 0) * 100).toFixed(2)}%</div>
+                                </div>
                             </div>
                             
                             <div className="flex gap-2 mb-2">
