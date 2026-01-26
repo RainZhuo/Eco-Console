@@ -36,12 +36,14 @@ export interface DailyLog {
   memePrice: number;
   reservoirBalance: number;
   buybackAmount: number;
+  buybackMemeAmount: number; // New: Actual MEME bought back
   buybackRate: number; // The % used from reservoir
   totalWealth: number;
   newWealth: number;
   stakingApy?: number; // Visualizing staking returns
   botActivity?: number; // Multiplier of bot activity
   botRoi?: number; // Calculated ROI for bots
+  medalsInPool?: number; // New: Track historical pool size for cost calculation
 }
 
 // Config Constants
