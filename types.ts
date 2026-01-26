@@ -48,12 +48,13 @@ export interface DailyLog {
 export const CONFIG = {
   CRAFT_COST: 300, // Updated per prompt
   WEALTH_PER_ITEM: 286,
+  WEALTH_SALVAGE_RATE: 0.5, // 50% return on destruction
   CHEST_OPEN_COST: 10,
   MEDAL_MIN: 5,
   MEDAL_MAX: 15,
   DAILY_MEME_REWARD: 1000000,
-  INITIAL_AMM_MEME: 10000000,
-  INITIAL_AMM_LVMON: 1000000,
+  INITIAL_AMM_MEME: 1000000,
+  INITIAL_AMM_LVMON: 2000000,
   INITIAL_PLAYER_LVMON: 5000, // Increased starting capital for easier testing
   
   // Simulation Constants

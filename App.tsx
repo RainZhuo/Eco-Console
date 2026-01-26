@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, Legend, ResponsiveContainer, AreaChart, Area, BarChart, Bar, ComposedChart 
 } from 'recharts';
 import { 
-  Coins, Box, Hammer, TrendingUp, RefreshCw, Archive, Activity, DollarSign, Database, Lock, Unlock, Gift, Users, Gauge, TrendingDown, Zap 
+  Coins, Box, Hammer, TrendingUp, RefreshCw, Archive, Activity, DollarSign, Database, Lock, Unlock, Gift, Users, Gauge, TrendingDown, Zap, Flame 
 } from 'lucide-react';
 import { AMMState, GlobalState, PlayerState, DailyLog, CONFIG } from './types';
 import { calculateBuybackRate, formatNumber, getAmountOut } from './utils';
@@ -27,11 +27,20 @@ const generateBotActivity = (context?: BotDecisionContext) => {
         // Avg Wealth (5000) ~= 17.5 items. 
         // Craft Cost = 17.5 * CONFIG.CRAFT_COST
         // Chest Cost = (5000/100) * CONFIG.CHEST_OPEN_COST = 50 * 10 = 500
-        // Total Cost ~= 17.5 * 300 + 500 = 5250 + 500 = 5750 LvMON
+        // Gross Outlay = 5250 + 500 = 5750 LvMON
         const avgItems = CONFIG.SIM_OTHERS_DAILY_WEALTH_AVG / CONFIG.WEALTH_PER_ITEM;
         const avgChests = CONFIG.SIM_OTHERS_DAILY_WEALTH_AVG / 100;
-        const totalCost = (avgItems * CONFIG.CRAFT_COST) + (avgChests * CONFIG.CHEST_OPEN_COST);
+        const grossOutlay = (avgItems * CONFIG.CRAFT_COST) + (avgChests * CONFIG.CHEST_OPEN_COST);
         
+        // ** NEW LOGIC **: Recoverable Value (Salvage)
+        // Since bots know they can destroy wealth to get 50% back, the "Risk Cost" is lower.
+        // Recoverable = Wealth Generated * 50%
+        const recoverableValue = (avgItems * CONFIG.WEALTH_PER_ITEM) * CONFIG.WEALTH_SALVAGE_RATE;
+        
+        // Effective Cost = Outlay - Recoverable Value
+        // This simulates that the bot considers the asset value retained in the equipment.
+        const effectiveCost = grossOutlay - recoverableValue;
+
         // Revenue Basis:
         // Avg Medals = 50 chests * 10 = 500 medals.
         // Pool Share assumption: 100 bots * 500 = 50000 medals total.
@@ -45,7 +54,7 @@ const generateBotActivity = (context?: BotDecisionContext) => {
         const estRewardMeme = CONFIG.DAILY_MEME_REWARD * share;
         const estRevenue = estRewardMeme * context.currentPrice;
 
-        computedRoi = estRevenue / totalCost;
+        computedRoi = estRevenue / effectiveCost;
 
         // Decision: Adjust Activity based on ROI
         // ROI < 0.5 -> Deep Freeze (0.2x activity)
@@ -123,6 +132,7 @@ export default function App() {
 
   // Simulation Controls
   const [craftBatchSize, setCraftBatchSize] = useState(1);
+  const [salvageBatchSize, setSalvageBatchSize] = useState(1);
   const [openChestBatchSize, setOpenChestBatchSize] = useState(1);
   const [sellMemePercent, setSellMemePercent] = useState(50);
   const [stakeAmount, setStakeAmount] = useState(0);
@@ -187,6 +197,26 @@ export default function App() {
       dailyNewWealth: prev.dailyNewWealth + wealthGain,
       reservoirLvMON: prev.reservoirLvMON + toReservoir,
     }));
+  };
+
+  const handleSalvage = () => {
+      const count = salvageBatchSize;
+      if (player.equipmentCount < count) return alert("装备数量不足");
+      
+      const wealthToBurn = count * CONFIG.WEALTH_PER_ITEM;
+      const lvMONReturn = wealthToBurn * CONFIG.WEALTH_SALVAGE_RATE;
+
+      setPlayer(prev => ({
+          ...prev,
+          equipmentCount: prev.equipmentCount - count,
+          wealth: prev.wealth - wealthToBurn,
+          lvMON: prev.lvMON + lvMONReturn
+      }));
+
+      setGlobal(prev => ({
+          ...prev,
+          totalWealth: Math.max(0, prev.totalWealth - wealthToBurn)
+      }));
   };
 
   const openChests = () => {
@@ -547,6 +577,28 @@ export default function App() {
                             </button>
                         </div>
                     </div>
+                    
+                    {/* Action: Salvage (New) */}
+                    <div className="bg-red-900/20 border border-red-900/50 p-3 rounded">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-sm font-medium flex items-center gap-2 text-red-300">
+                                <Flame size={16}/> 销毁装备 ({player.equipmentCount})
+                            </span>
+                            <span className="text-xs text-slate-400">返还 50% 价值 LvMON</span>
+                        </div>
+                        <div className="flex gap-2">
+                             <input 
+                                type="number" 
+                                min="1" 
+                                value={salvageBatchSize} 
+                                onChange={(e) => setSalvageBatchSize(parseInt(e.target.value) || 1)}
+                                className="w-16 bg-slate-900 border border-slate-600 rounded px-2 text-sm"
+                            />
+                            <button onClick={handleSalvage} className="flex-1 bg-red-800 hover:bg-red-700 text-xs py-1.5 rounded font-bold text-red-100">
+                                销毁 (回收资金)
+                            </button>
+                        </div>
+                    </div>
 
                     {/* Action: Open Chests */}
                     <div className="bg-slate-700/30 p-3 rounded">
@@ -733,7 +785,7 @@ export default function App() {
                         </div>
                     </div>
                     <div className="bg-slate-900 p-3 rounded">
-                        <div className="text-xs text-slate-400">搬砖 ROI</div>
+                        <div className="text-xs text-slate-400">搬砖 ROI (含回收)</div>
                         <div className="text-lg font-mono text-white">{(lastLog?.botRoi || 0).toFixed(2)}x</div>
                     </div>
                      <div className="bg-slate-900 p-3 rounded">
@@ -805,6 +857,7 @@ export default function App() {
                     <li><strong className="text-blue-400">Sigmoid 修正：</strong> 回购中点已调整至 50万财富值，现在回购率会动态变化，不再锁死 8%。</li>
                     <li><strong className="text-purple-400">智能机器人：</strong> 引入了 ROI 计算。如果做装备亏本，机器人会大幅减少产量（活跃度下降）；如果暴利，会开启 FOMO 模式。</li>
                     <li><strong className="text-pink-400">追涨杀跌：</strong> 机器人会根据 APY 动态调整质押比例。APY 高时锁仓，MEME 价格下跌时恐慌抛售。</li>
+                    <li><strong className="text-red-400">资产回收：</strong> 新增“销毁装备”功能。玩家和机器人可以将装备销毁，获得其财富值 50% 的 LvMON 返还。这降低了机器人的预期成本，从而提高了活跃意愿。</li>
                 </ul>
             </div>
 
