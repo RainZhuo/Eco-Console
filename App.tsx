@@ -312,9 +312,12 @@ export default function App() {
                 const items = botNewWealth / CONFIG.WEALTH_PER_ITEM;
                 totalBotReservoirInput += (items * CONFIG.CRAFT_COST * 0.5);
 
-                // B. Chest Opening (Stock) - Simplified: assume 1% of wealth used for chests
-                const chestRate = Math.max(0.1, decision.activityMultiplier * 0.5);
-                const botChests = Math.floor(chestRate * 5); // Random base
+                // B. Chest Opening (Stock) - Fixed Logic
+                // New Formula: botChests = Math.floor((botNewWealth / 100) * chestRate)
+                // This ensures chest count scales with wealth (approx 10% of wealth used)
+                const chestRate = Math.max(0.5, decision.activityMultiplier); 
+                const botChests = Math.floor((botNewWealth / 100) * chestRate);
+                
                 totalBotChestCost += botChests * CONFIG.CHEST_OPEN_COST;
                 totalBotMedalsGenerated += botChests * 10;
 
@@ -362,8 +365,9 @@ export default function App() {
                 totalBotSellAmount = botNetReward + unstake;
             }
 
-            // Chests
-            const chests = Math.floor(totalBotNewWealth/1000); 
+            // Chests - Scale with wealth to match expected output (~50k medals)
+            // 500k wealth / 100 = 5000 chests * 10 medals = 50k medals.
+            const chests = Math.floor(totalBotNewWealth / 100); 
             totalBotChestCost = chests * CONFIG.CHEST_OPEN_COST;
             totalBotMedalsGenerated = chests * 10;
         }
