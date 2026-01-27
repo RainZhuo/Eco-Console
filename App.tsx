@@ -102,7 +102,8 @@ export default function App() {
             stakingApy: 0,
             botActivity: 1.0,
             botRoi: 0.01,
-            medalsInPool: 50000 
+            medalsInPool: 50000,
+            aiAnalysis: "System Initialized"
         }]);
         hasInitializedDay1.current = true;
         
@@ -118,6 +119,25 @@ export default function App() {
   const handleExportHistory = () => {
       if (history.length === 0) return alert("暂无历史数据");
       const ws = XLSX.utils.json_to_sheet(history);
+      
+      // Auto-adjust column width for aiAnalysis if possible, otherwise it's just a standard sheet
+      const wscols = [
+          {wch: 5}, // day
+          {wch: 10}, // price
+          {wch: 15}, // reservoir
+          {wch: 15}, // buyback
+          {wch: 15}, // buybackMeme
+          {wch: 10}, // rate
+          {wch: 15}, // wealth
+          {wch: 15}, // newWealth
+          {wch: 10}, // apy
+          {wch: 10}, // activity
+          {wch: 10}, // roi
+          {wch: 15}, // medals
+          {wch: 50}, // aiAnalysis (wider)
+      ];
+      ws['!cols'] = wscols;
+
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "History");
       XLSX.writeFile(wb, `mmo_history_day${global.day}.xlsx`);
@@ -404,7 +424,8 @@ export default function App() {
             stakingApy: global.totalStakedMeme > 0 ? (stakingDividend * 365 / global.totalStakedMeme) : 0,
             botActivity: avgBotActivity,
             botRoi: 0, // Simplified
-            medalsInPool: global.medalsInPool
+            medalsInPool: global.medalsInPool,
+            aiAnalysis: marketAnalysisText // Save AI analysis to history
         };
         setHistory(prev => [...prev, log]);
 

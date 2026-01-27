@@ -44,6 +44,7 @@ export interface DailyLog {
   botActivity?: number; // Multiplier of bot activity
   botRoi?: number; // Calculated ROI for bots
   medalsInPool?: number; // New: Track historical pool size for cost calculation
+  aiAnalysis?: string; // AI Market Analysis text
 }
 
 // Config Constants
