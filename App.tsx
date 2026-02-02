@@ -20,7 +20,8 @@ export default function App() {
     totalWealth: 500000, 
     dailyNewWealth: 0,
     medalsInPool: 50000, 
-    totalStakedMeme: 500000, 
+    totalStakedMeme: 500000,
+    dailyChestRevenue: 0, // Init
   });
 
   const [amm, setAmm] = useState<AMMState>({
@@ -158,7 +159,8 @@ export default function App() {
     let totalMedalsWon = 0;
     for (let i = 0; i < openChestBatchSize; i++) totalMedalsWon += Math.floor(Math.random() * (CONFIG.MEDAL_MAX - CONFIG.MEDAL_MIN + 1)) + CONFIG.MEDAL_MIN;
     setPlayer(prev => ({ ...prev, chests: prev.chests - openChestBatchSize, lvMON: prev.lvMON - cost, medals: prev.medals + totalMedalsWon }));
-    setGlobal(prev => ({ ...prev, reservoirLvMON: prev.reservoirLvMON + cost }));
+    // MODIFIED: Chest revenue goes to dailyChestRevenue, not reservoirLvMON
+    setGlobal(prev => ({ ...prev, dailyChestRevenue: (prev.dailyChestRevenue || 0) + cost }));
   };
 
   const investMedals = () => {
@@ -274,6 +276,9 @@ export default function App() {
         let tempBots = [...bots];
         let tempPlayer = { ...player };
 
+        // Ensure dailyChestRevenue is initialized for calculation in this scope
+        if (tempGlobal.dailyChestRevenue === undefined) tempGlobal.dailyChestRevenue = 0;
+
         // Distribute Rewards to Bots first
         const yesterdayBotMedals = tempBots.reduce((sum, b) => sum + b.medals, 0);
         if (yesterdayBotMedals > 0) {
@@ -353,7 +358,9 @@ export default function App() {
                         for(let k=0; k<action.openChests; k++) medalsWon += Math.floor(Math.random() * (CONFIG.MEDAL_MAX - CONFIG.MEDAL_MIN + 1)) + CONFIG.MEDAL_MIN;
                         bot.medals += medalsWon;
                         
-                        tempGlobal.reservoirLvMON += cost;
+                        // MODIFIED: Chest revenue goes to dailyChestRevenue, not reservoir
+                        tempGlobal.dailyChestRevenue += cost;
+                        
                         totalBotChestCost += cost;
                         executionNotes.push("Open:OK");
                     } else {
@@ -370,7 +377,6 @@ export default function App() {
                 if (bot.medals > 0) {
                     totalBotMedalsGenerated += bot.medals;
                     executionNotes.push(`Invested:${bot.medals}`);
-                    // Note: bot.medals is not reset here, it stays until next morning reward distribution
                 } else {
                     executionNotes.push("Invest:None");
                 }
@@ -444,7 +450,14 @@ export default function App() {
 
         // 5. SYSTEM BUYBACK & DIVIDENDS
         const currentBuybackRate = calculateBuybackRate(tempGlobal.dailyNewWealth);
-        const buybackBudget = tempGlobal.reservoirLvMON * currentBuybackRate;
+        
+        // Split buyback sources:
+        // Source 1: Reservoir * Sigmoid Rate
+        const reservoirBuyback = tempGlobal.reservoirLvMON * currentBuybackRate;
+        // Source 2: Daily Chest Revenue (100% immediate buyback)
+        const chestBuyback = tempGlobal.dailyChestRevenue;
+        
+        const buybackBudget = reservoirBuyback + chestBuyback;
         
         let actualBuybackAmount = 0;
         let actualMemeBought = 0;
@@ -457,9 +470,14 @@ export default function App() {
             tempAmm.reserveLvMON += buybackBudget;
             tempAmm.reserveMEME -= actualMemeBought;
             
-            tempGlobal.reservoirLvMON -= buybackBudget;
+            // Deduct only the reservoir portion from the reservoir
+            tempGlobal.reservoirLvMON -= reservoirBuyback;
+            
             stakingDividend = actualMemeBought * 0.1; // 10% to stakers
         }
+
+        // Reset daily chest revenue after using it
+        tempGlobal.dailyChestRevenue = 0;
 
         // 6. PLAYER UPDATES
         tempPlayer.unclaimedPoolReward += playerNetReward;
@@ -511,7 +529,8 @@ export default function App() {
             ...tempGlobal,
             day: prev.day + 1,
             medalsInPool: totalBotMedalsGenerated, 
-            dailyNewWealth: 0 
+            dailyNewWealth: 0,
+            dailyChestRevenue: 0 // Explicit reset
         }));
 
     } catch (e) {

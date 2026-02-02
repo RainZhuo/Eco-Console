@@ -5,6 +5,7 @@ export interface GlobalState {
   dailyNewWealth: number; // X-axis for Sigmoid
   medalsInPool: number; // Medals invested in the current daily pool (Player + Others)
   totalStakedMeme: number; // Total MEME staked in the system
+  dailyChestRevenue: number; // New: Accumulated chest spend for the day (100% buyback)
 }
 
 export interface AMMState {
