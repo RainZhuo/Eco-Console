@@ -31,6 +31,20 @@ export interface PlayerState {
   unclaimedStakingReward: number; // MEME from Reservoir Buyback (10% allocation)
 }
 
+// New: Individual Bot State
+export interface BotState {
+  id: number;
+  name: string;
+  personality: 'Whale' | 'Degen' | 'Farmer' | 'PaperHand' | 'DiamondHand';
+  lvMON: number;
+  meme: number;
+  stakedMeme: number;
+  medals: number;
+  wealth: number;
+  chests: number;
+  equipmentCount: number;
+}
+
 export interface DailyLog {
   day: number;
   memePrice: number;
@@ -49,19 +63,17 @@ export interface DailyLog {
 
 // Config Constants
 export const CONFIG = {
-  CRAFT_COST: 300, // Updated per prompt
+  CRAFT_COST: 3000, // Updated per prompt request (was 300)
   WEALTH_PER_ITEM: 286,
   WEALTH_SALVAGE_RATE: 0.5, // 50% return on destruction
-  CHEST_OPEN_COST: 10,
+  CHEST_OPEN_COST: 100, // Adjusted relative to craft cost
   MEDAL_MIN: 5,
   MEDAL_MAX: 15,
   DAILY_MEME_REWARD: 1000000,
   INITIAL_AMM_MEME: 1000000,
   INITIAL_AMM_LVMON: 2000000,
-  INITIAL_PLAYER_LVMON: 5000, // Increased starting capital for easier testing
+  INITIAL_PLAYER_LVMON: 50000, // Increased for testing
   
   // Simulation Constants
-  SIM_OTHERS_COUNT: 100, // Virtual players
-  SIM_OTHERS_DAILY_WEALTH_AVG: 5000,
-  SIM_OTHERS_MEDAL_INVEST_AVG: 500,
+  SIM_OTHERS_COUNT: 10, // Explicitly 10 bots
 };

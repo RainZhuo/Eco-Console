@@ -1,171 +1,181 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { BotState, CONFIG } from "./types";
 
-// 机器人性格定义
-export type BotPersonality = 'Conservative' | 'Aggressive';
-
-// 机器人决策结果接口
-export interface BotDecision {
-  activityMultiplier: number; // 0-3: 活跃度倍率 (影响新财富创造)
-  stakeRatio: number;         // -1.0 to 1.0: 质押/解质押比例 (负数解质押，正数质押)
-  sellRatio: number;          // 0-1: 卖出 MEME 的比例
+// 机器人决策接口 (每个机器人的具体行动)
+export interface BotAction {
+  botId: number;
+  craftCount: number;      // 制作多少装备 (消耗 LvMON -> 获得 Wealth + Chests)
+  openChests: number;      // 开多少箱子 (消耗 LvMON -> 获得 Medals)
+  investMedals: boolean;   // 是否将所有勋章投入奖池 (通常为 true，为了赚钱)
+  stakeMemePercent: number; // 0.0 - 1.0: 现有流动 MEME 的百分之多少拿去质押
+  unstakeMemePercent: number; // 0.0 - 1.0: 已质押 MEME 的百分之多少赎回
+  sellMemePercent: number;  // 0.0 - 1.0: 流动 MEME (含赎回的) 卖出多少换回 LvMON
+  rationale: string;       // 简短决策理由
 }
 
-// 市场上下文
 export interface MarketContext {
   day: number;
   price: number;
   apy: number;
-  priceTrend: 'Up' | 'Down' | 'Stable';
-  consecutiveGreenDays: number;
-  liquidityHealth: number; // 0-1, MEME ratio in LP
-}
-
-// 机器人个体类
-export class Bot {
-  id: number;
-  personality: BotPersonality;
-  history: BotDecision[];
-
-  constructor(id: number, personality: BotPersonality) {
-    this.id = id;
-    this.personality = personality;
-    this.history = [];
-  }
-
-  // 基于群体策略做出个体决策
-  decide(groupStrategy: BotDecision, volatility: number): BotDecision {
-    // 引入个体随机性 (高斯分布模拟)
-    const randomize = (val: number, vol: number) => {
-      const u = 1 - Math.random();
-      const v = Math.random();
-      const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-      return val + z * vol; // Mean + Z * StdDev
-    };
-
-    const decision: BotDecision = {
-      activityMultiplier: Math.max(0, randomize(groupStrategy.activityMultiplier, volatility * 0.5)),
-      stakeRatio: Math.max(-1, Math.min(1, randomize(groupStrategy.stakeRatio, volatility * 0.2))),
-      sellRatio: Math.max(0, Math.min(1, randomize(groupStrategy.sellRatio, volatility * 0.2))),
-    };
-
-    this.history.push(decision);
-    // 只保留最近 7 天记录
-    if (this.history.length > 7) this.history.shift();
-    
-    return decision;
-  }
-}
-
-// AI 响应的 Schema
-interface AiStrategyResponse {
-  conservative: BotDecision;
-  aggressive: BotDecision;
-  marketAnalysis: string; // 让 AI 简单解释原因
+  totalMedalsInPool: number; // 昨天的/预测的奖池大小，用于计算稀释
+  priceTrend: string;
 }
 
 export class BotManager {
   private ai: GoogleGenAI;
-  private bots: Bot[];
+  
+  // Rate Limiting
+  private lastCallTime: number = 0;
+  private readonly MIN_CALL_INTERVAL = 5000; 
+  public apiCallCount: number = 0;
 
   constructor(apiKey: string) {
     this.ai = new GoogleGenAI({ apiKey });
-    this.bots = [];
-    this.initBots();
   }
 
-  // 初始化 100 个机器人 (50 保守, 50 激进)
-  private initBots() {
-    for (let i = 0; i < 50; i++) {
-      this.bots.push(new Bot(i, 'Conservative'));
+  // 生成初始化的机器人列表
+  generateInitialBots(): BotState[] {
+    const personalities = ['Whale', 'Degen', 'Farmer', 'PaperHand', 'DiamondHand'] as const;
+    const bots: BotState[] = [];
+    
+    for (let i = 0; i < 10; i++) {
+      const type = personalities[i % personalities.length];
+      let initialLvMON = 10000;
+      let initialMeme = 0;
+
+      // 根据人设初始化资产
+      if (type === 'Whale') { initialLvMON = 100000; initialMeme = 50000; }
+      if (type === 'Degen') { initialLvMON = 2000; initialMeme = 10000; }
+      if (type === 'Farmer') { initialLvMON = 20000; }
+
+      bots.push({
+        id: i,
+        name: `Bot-${i+1} [${type}]`,
+        personality: type,
+        lvMON: initialLvMON,
+        meme: initialMeme,
+        stakedMeme: 0,
+        medals: 0,
+        wealth: 0,
+        chests: 0,
+        equipmentCount: 0
+      });
     }
-    for (let i = 50; i < 100; i++) {
-      this.bots.push(new Bot(i, 'Aggressive'));
+    return bots;
+  }
+
+  private checkRateLimit(): { allowed: boolean; waitTime: number } {
+    const now = Date.now();
+    const elapsed = now - this.lastCallTime;
+    if (elapsed < this.MIN_CALL_INTERVAL) {
+      return { allowed: false, waitTime: this.MIN_CALL_INTERVAL - elapsed };
     }
+    return { allowed: true, waitTime: 0 };
   }
 
-  getBots() {
-    return this.bots;
-  }
+  async getPlayersDecisions(
+    context: MarketContext, 
+    bots: BotState[]
+  ): Promise<{ 
+    actions: BotAction[], 
+    analysis: string,
+    reason: 'Success' | 'RateLimit' | 'Quota' | 'Error'
+  }> {
+    
+    // 1. Check Rate Limit
+    const { allowed, waitTime } = this.checkRateLimit();
+    if (!allowed) {
+        return { actions: [], analysis: `⏳ API 冷却中...`, reason: 'RateLimit' };
+    }
 
-  // 调用 LLM 获取群体策略
-  async getSwarmDecisions(context: MarketContext): Promise<{ decisions: Map<number, BotDecision>, analysis: string }> {
     try {
-      // 构建 Prompt
+      this.lastCallTime = Date.now();
+      this.apiCallCount++;
+
+      // 2. Build Contextual Prompt
+      // 精简 Bot 状态以减少 Token 消耗
+      const botsSummary = bots.map(b => 
+        `ID:${b.id} Type:${b.personality} LvMON:${Math.floor(b.lvMON)} MEME:${Math.floor(b.meme)} Staked:${Math.floor(b.stakedMeme)} Chests:${b.chests}`
+      ).join('\n');
+
       const prompt = `
-        你是一个 MMORPG 经济系统的 AI 模拟器，负责控制 100 个机器人玩家的决策。
+        你是一个 MMORPG 经济系统的核心模拟引擎。你需要分别控制 10 个具有不同性格和资产状况的玩家。
         
-        当前市场数据:
-        - 天数: Day ${context.day}
-        - MEME 价格: ${context.price.toFixed(4)} LvMON
-        - 质押 APY: ${context.apy.toFixed(2)}%
-        - 价格趋势: ${context.priceTrend} (连续上涨 ${context.consecutiveGreenDays} 天)
-        - 流动性池 MEME 占比: ${(context.liquidityHealth * 100).toFixed(1)}% (>60% 意味着抛压重)
+        **目标**：每个玩家都是**自私**的，他们的终极目标是**最大化手中的 LvMON (法币)**。
+        
+        **经济参数**：
+        1. **制作装备**：消耗 ${CONFIG.CRAFT_COST} LvMON -> 获得装备 + 少量宝箱。
+        2. **开宝箱**：消耗 ${CONFIG.CHEST_OPEN_COST} LvMON -> 获得勋章 (Medals)。
+        3. **挖矿 (Invest)**：投入勋章 -> 瓜分每日 ${CONFIG.DAILY_MEME_REWARD} MEME 奖池。
+           * 收益公式：(我的勋章 / 全服总勋章) * 100万 * 当前MEME价格。
+           * 如果全服勋章太多(Dilution)，回本周期会变长，玩家可能会停止投入。
+        4. **质押 (Stake)**：质押 MEME -> 获得系统回购的 MEME 分红 (APY: ${context.apy.toFixed(1)}%)。
+        5. **交易**：高价卖出 MEME 换回 LvMON 才是落袋为安。
 
-        你需要为两类玩家制定**平均策略**：
-        1. **保守型 (Conservative)**: 风险厌恶，喜欢落袋为安，高 APY 时才质押，价格暴涨时止盈。
-        2. **激进型 (Aggressive)**: 风险偏好，喜欢复投和制作装备，追涨杀跌，容易 FOMO。
+        **当前市场**：
+        - Day: ${context.day}
+        - MEME Price: ${context.price.toFixed(4)} LvMON
+        - Price Trend: ${context.priceTrend}
+        - Estimated Total Medals in Pool: ${context.totalMedalsInPool} (用于计算稀释)
 
-        请输出 JSON 格式，定义两类群体的行为均值：
-        - activityMultiplier: 0.0 (休眠) 到 3.0 (极度活跃/FOMO)
-        - stakeRatio: -1.0 (全部解质押) 到 1.0 (全部收益复投+追加本金)。0 表示不动。
-        - sellRatio: 0.0 (不卖) 到 1.0 (清空流动资产)。
+        **玩家列表 (现有资产)**：
+        ${botsSummary}
+
+        **性格指南**：
+        - **Whale**: 资金雄厚，喜欢通过质押控制市场，价格高时会分批出货。
+        - **Degen**: 赌徒，喜欢梭哈开箱子挖矿，不爱持有 LvMON，拿到 MEME 就卖或者全质押。
+        - **Farmer**: 精打细算，只有当挖矿收益 > 成本时才制作/开箱，否则只卖 MEME。
+        - **PaperHand**: 价格一下跌就恐慌抛售 (Sell 100%)。
+        - **DiamondHand**: 无论涨跌都囤积 MEME (Stake 100%)。
+
+        请为这 10 个玩家分别制定今天的操作策略。
       `;
 
+      // 3. Call Gemini
       const result = await this.ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
         config: {
-          systemInstruction: "You are an expert game economist engine. Respond ONLY in JSON.",
+          systemInstruction: "You are a selfish, profit-driven economic simulator. Return JSON only.",
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              conservative: {
-                type: Type.OBJECT,
-                properties: {
-                  activityMultiplier: { type: Type.NUMBER },
-                  stakeRatio: { type: Type.NUMBER },
-                  sellRatio: { type: Type.NUMBER },
-                },
-                required: ["activityMultiplier", "stakeRatio", "sellRatio"]
-              },
-              aggressive: {
-                type: Type.OBJECT,
-                properties: {
-                  activityMultiplier: { type: Type.NUMBER },
-                  stakeRatio: { type: Type.NUMBER },
-                  sellRatio: { type: Type.NUMBER },
-                },
-                required: ["activityMultiplier", "stakeRatio", "sellRatio"]
-              },
-              marketAnalysis: { type: Type.STRING }
+              marketAnalysis: { type: Type.STRING, description: "One sentence summary of the market sentiment." },
+              actions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    botId: { type: Type.INTEGER },
+                    craftCount: { type: Type.INTEGER, description: "How many equipments to craft" },
+                    openChests: { type: Type.INTEGER, description: "How many chests to open" },
+                    investMedals: { type: Type.BOOLEAN },
+                    stakeMemePercent: { type: Type.NUMBER, description: "0.0 to 1.0" },
+                    unstakeMemePercent: { type: Type.NUMBER, description: "0.0 to 1.0" },
+                    sellMemePercent: { type: Type.NUMBER, description: "0.0 to 1.0" },
+                    rationale: { type: Type.STRING }
+                  },
+                  required: ["botId", "craftCount", "openChests", "stakeMemePercent", "unstakeMemePercent", "sellMemePercent"]
+                }
+              }
             },
-            required: ["conservative", "aggressive", "marketAnalysis"]
+            required: ["actions", "marketAnalysis"]
           }
         }
       });
 
-      const responseText = result.text;
-      if (!responseText) throw new Error("Empty response from AI");
-      
-      const strategy: AiStrategyResponse = JSON.parse(responseText);
+      const response = JSON.parse(result.text || "{}");
+      return { 
+        actions: response.actions || [], 
+        analysis: response.marketAnalysis || "No analysis", 
+        reason: 'Success' 
+      };
 
-      // 为每个 Bot 生成独立决策
-      const decisions = new Map<number, BotDecision>();
-      
-      this.bots.forEach(bot => {
-        const groupStrategy = bot.personality === 'Conservative' ? strategy.conservative : strategy.aggressive;
-        // 激进型玩家波动性更大 (0.3 vs 0.1)
-        const volatility = bot.personality === 'Conservative' ? 0.1 : 0.3;
-        decisions.set(bot.id, bot.decide(groupStrategy, volatility));
-      });
-
-      return { decisions, analysis: strategy.marketAnalysis };
-
-    } catch (error) {
-      console.error("AI Decision Failed, falling back to algorithm:", error);
-      // Fallback: 返回空 Map，外部逻辑会处理
-      return { decisions: new Map(), analysis: "AI Offline: Using Algorithmic Fallback" };
+    } catch (error: any) {
+      console.error("AI Decision Error:", error);
+      const isQuota = error.toString().includes("429") || error.toString().includes("RESOURCE_EXHAUSTED");
+      return { actions: [], analysis: isQuota ? "Quota Exceeded" : "Error", reason: isQuota ? 'Quota' : 'Error' };
     }
   }
 }
