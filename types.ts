@@ -44,6 +44,7 @@ export interface BotState {
   wealth: number;
   chests: number;
   equipmentCount: number;
+  investedMedals: number; // New: Track invested medals for rewards calculation
 }
 
 export interface DailyLog {

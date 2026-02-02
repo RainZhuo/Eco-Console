@@ -17,11 +17,11 @@ export default function App() {
   const [global, setGlobal] = useState<GlobalState>({
     day: 1,
     reservoirLvMON: 0,
-    totalWealth: 500000, 
+    totalWealth: 0, // Modified: Reset to 0 for Genesis
     dailyNewWealth: 0,
-    medalsInPool: 50000, 
-    totalStakedMeme: 500000,
-    dailyChestRevenue: 0, // Init
+    medalsInPool: 0, // Modified: Reset to 0
+    totalStakedMeme: 0, // Modified: Reset to 0
+    dailyChestRevenue: 0, 
   });
 
   const [amm, setAmm] = useState<AMMState>({
@@ -82,14 +82,14 @@ export default function App() {
             reservoirBalance: 0,
             buybackAmount: 0,
             buybackMemeAmount: 0,
-            buybackRate: 0.02,
-            totalWealth: 500000,
+            buybackRate: 0, // Modified: 0
+            totalWealth: 0, // Modified: 0
             newWealth: 0,
             stakingApy: 0,
-            botActivity: 1.0,
-            botRoi: 0.01,
-            medalsInPool: 50000,
-            aiAnalysis: "System Initialized"
+            botActivity: 0, // Modified: 0 (No activity on Day 1)
+            botRoi: 0,
+            medalsInPool: 0, // Modified: 0
+            aiAnalysis: "System Initialized from Zero" // Modified
         }]);
         hasInitializedDay1.current = true;
         
@@ -233,7 +233,7 @@ export default function App() {
                 day: global.day,
                 price: currentPrice,
                 apy: lastApy,
-                totalMedalsInPool: global.medalsInPool || 1,
+                totalMedalsInPool: global.medalsInPool || 1, // Will be 0 or 1 on day 1
                 priceTrend
             };
             
@@ -259,8 +259,8 @@ export default function App() {
         
         if (totalMedals > 0) {
             playerReward = CONFIG.DAILY_MEME_REWARD * (player.investedMedals / totalMedals);
-            // Bots share
-            const botsInvestedTotal = bots.reduce((sum, b) => sum + (b.medals > 0 ? b.medals : 0), 0); 
+            // Bots share: Use INVESTED medals (from yesterday), not inventory medals
+            const botsInvestedTotal = bots.reduce((sum, b) => sum + (b.investedMedals > 0 ? b.investedMedals : 0), 0); 
             othersTotalReward = CONFIG.DAILY_MEME_REWARD * (botsInvestedTotal / totalMedals);
         }
 
@@ -280,14 +280,14 @@ export default function App() {
         if (tempGlobal.dailyChestRevenue === undefined) tempGlobal.dailyChestRevenue = 0;
 
         // Distribute Rewards to Bots first
-        const yesterdayBotMedals = tempBots.reduce((sum, b) => sum + b.medals, 0);
+        const yesterdayBotMedals = tempBots.reduce((sum, b) => sum + b.investedMedals, 0);
         if (yesterdayBotMedals > 0) {
              tempBots.forEach(bot => {
-                 const share = bot.medals / totalMedals;
+                 const share = bot.investedMedals / totalMedals;
                  const gross = CONFIG.DAILY_MEME_REWARD * share;
                  const net = gross * 0.9;
                  bot.meme += net; 
-                 bot.medals = 0;
+                 bot.investedMedals = 0; // Clear INVESTED medals after reward
              });
         }
 
@@ -375,8 +375,14 @@ export default function App() {
             if (action.investMedals) {
                 plannedStr += `Invest:All `;
                 if (bot.medals > 0) {
-                    totalBotMedalsGenerated += bot.medals;
-                    executionNotes.push(`Invested:${bot.medals}`);
+                    const investedAmount = bot.medals;
+                    totalBotMedalsGenerated += investedAmount;
+                    
+                    // Transfer from inventory to invested state
+                    bot.investedMedals += investedAmount;
+                    bot.medals = 0; // Clear inventory
+                    
+                    executionNotes.push(`Invested:${investedAmount}`);
                 } else {
                     executionNotes.push("Invest:None");
                 }
@@ -516,7 +522,7 @@ export default function App() {
             stakingApy: tempGlobal.totalStakedMeme > 0 ? (stakingDividend * 365 / tempGlobal.totalStakedMeme) : 0,
             botActivity: shuffledActions.length / 10,
             botRoi: 0, 
-            medalsInPool: tempGlobal.medalsInPool,
+            medalsInPool: tempGlobal.medalsInPool + totalBotMedalsGenerated, // Log the accumulated pool size
             aiAnalysis: marketAnalysisText
         };
 
@@ -528,7 +534,7 @@ export default function App() {
         setGlobal(prev => ({
             ...tempGlobal,
             day: prev.day + 1,
-            medalsInPool: totalBotMedalsGenerated, 
+            medalsInPool: tempGlobal.medalsInPool + totalBotMedalsGenerated, // FIX: Accumulate instead of replace
             dailyNewWealth: 0,
             dailyChestRevenue: 0 // Explicit reset
         }));
@@ -842,6 +848,7 @@ export default function App() {
                     <li><strong className="text-purple-400">串行博弈：</strong> 每一天系统获取所有 Bot 的决策后，<strong className="text-white">随机打乱执行顺序</strong>。</li>
                     <li><strong className="text-pink-400">价格冲击：</strong> 每个 Bot 的卖出操作都会实时拉低 AMM 价格，后行动的 Bot 卖出价格更低，模拟真实挤兑。</li>
                     <li><strong className="text-yellow-400">自私理性：</strong> Bot 会根据当前 MEME 价格、奖池稀释程度和自身资金，倒推是否值得制作装备和开箱。</li>
+                    <li><strong className="text-green-400">创世流动性：</strong> AMM 初始注入 100万 MEME + 200万 LvMON，不属于任何玩家，用于启动市场交易。</li>
                 </ul>
             </div>
 

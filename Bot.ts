@@ -68,7 +68,8 @@ export class BotManager {
         medals: 0,
         wealth: 0,
         chests: 0,
-        equipmentCount: 0
+        equipmentCount: 0,
+        investedMedals: 0 // Init invested medals
       });
     }
     return bots;
