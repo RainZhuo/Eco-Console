@@ -40,13 +40,23 @@ export class BotManager {
     
     for (let i = 0; i < 10; i++) {
       const type = personalities[i % personalities.length];
-      let initialLvMON = 10000;
-      let initialMeme = 0;
+      let initialLvMON = 0;
+      const initialMeme = 0; // 强制所有 Bot 初始 MEME 为 0
 
-      // 根据人设初始化资产
-      if (type === 'Whale') { initialLvMON = 100000; initialMeme = 50000; }
-      if (type === 'Degen') { initialLvMON = 2000; initialMeme = 10000; }
-      if (type === 'Farmer') { initialLvMON = 20000; }
+      // 根据人设初始化资产 (随机化)
+      if (type === 'Whale') { 
+        // 巨鲸：80,000 - 150,000 LvMON
+        initialLvMON = Math.floor(Math.random() * 70000) + 80000; 
+      } else if (type === 'Degen') { 
+        // 赌徒：1,000 - 8,000 LvMON
+        initialLvMON = Math.floor(Math.random() * 7000) + 1000; 
+      } else if (type === 'Farmer') { 
+        // 打金者：15,000 - 30,000 LvMON
+        initialLvMON = Math.floor(Math.random() * 15000) + 15000; 
+      } else {
+        // 其他：5,000 - 20,000 LvMON
+        initialLvMON = Math.floor(Math.random() * 15000) + 5000;
+      }
 
       bots.push({
         id: i,

@@ -6,7 +6,7 @@ import {
 import { 
   Coins, Box, Hammer, TrendingUp, RefreshCw, Archive, Activity, DollarSign, Database, Lock, Unlock, Gift, Users, Gauge, TrendingDown, Zap, Flame, Download, BrainCircuit, Loader2, AlertTriangle, CloudLightning, User 
 } from 'lucide-react';
-import { AMMState, GlobalState, PlayerState, DailyLog, CONFIG, BotState } from './types';
+import { AMMState, GlobalState, PlayerState, DailyLog, CONFIG, BotState, BotDailyLog } from './types';
 import { calculateBuybackRate, formatNumber, getAmountOut } from './utils';
 import { InfoCard } from './components/InfoCard';
 import { BotManager, MarketContext, BotAction } from './Bot';
@@ -45,6 +45,9 @@ export default function App() {
 
   // NEW: Bots State
   const [bots, setBots] = useState<BotState[]>([]);
+  
+  // NEW: Bot Detailed History (for export)
+  const [botHistory, setBotHistory] = useState<BotDailyLog[]>([]);
 
   const [history, setHistory] = useState<DailyLog[]>([]);
   const hasInitializedDay1 = useRef(false);
@@ -101,13 +104,31 @@ export default function App() {
 
   const handleExportHistory = () => {
       if (history.length === 0) return alert("暂无历史数据");
-      const ws = XLSX.utils.json_to_sheet(history);
-      const wscols = [
+      const wb = XLSX.utils.book_new();
+
+      // Sheet 1: Global History
+      const wsHistory = XLSX.utils.json_to_sheet(history);
+      const wscolsHistory = [
           {wch: 5}, {wch: 10}, {wch: 15}, {wch: 15}, {wch: 15}, {wch: 10}, {wch: 15}, {wch: 15}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 15}, {wch: 50},
       ];
-      ws['!cols'] = wscols;
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "History");
+      wsHistory['!cols'] = wscolsHistory;
+      XLSX.utils.book_append_sheet(wb, wsHistory, "Global Overview");
+
+      // Sheet 2: Bot Detailed Logs
+      if (botHistory.length > 0) {
+        const wsBots = XLSX.utils.json_to_sheet(botHistory);
+        const wscolsBots = [
+            {wch: 5}, {wch: 5}, {wch: 12}, // Day, ID, Type
+            {wch: 10}, {wch: 8}, // Price, Trend
+            {wch: 40}, {wch: 40}, // Rationale, Planned
+            {wch: 30}, // Execution Notes
+            {wch: 10}, {wch: 10}, {wch: 10}, {wch: 10}, // Deltas
+            {wch: 12}, {wch: 12} // Final Balances
+        ];
+        wsBots['!cols'] = wscolsBots;
+        XLSX.utils.book_append_sheet(wb, wsBots, "Bot Details");
+      }
+
       XLSX.writeFile(wb, `mmo_history_day${global.day}.xlsx`);
   };
 
@@ -223,7 +244,6 @@ export default function App() {
             
             if (result.reason !== 'Success') {
                 marketAnalysisText += ` (Action Skipped: ${result.reason})`;
-                // Fallback: Empty actions, bots do nothing this turn
                 botActions = [];
             }
         }
@@ -231,9 +251,6 @@ export default function App() {
         setAiAnalysis(marketAnalysisText);
 
         // 3. SETTLEMENT OF PREVIOUS DAY REWARDS (For Bots & Player)
-        // This must happen BEFORE they act today, so they have capital
-        
-        // A. Distribute Pool Rewards (from yesterday's investment)
         const totalMedals = global.medalsInPool;
         let playerReward = 0;
         let othersTotalReward = 0;
@@ -241,7 +258,7 @@ export default function App() {
         if (totalMedals > 0) {
             playerReward = CONFIG.DAILY_MEME_REWARD * (player.investedMedals / totalMedals);
             // Bots share
-            const botsInvestedTotal = bots.reduce((sum, b) => sum + (b.medals > 0 ? b.medals : 0), 0); // Assuming all medals were invested yesterday (simplification)
+            const botsInvestedTotal = bots.reduce((sum, b) => sum + (b.medals > 0 ? b.medals : 0), 0); 
             othersTotalReward = CONFIG.DAILY_MEME_REWARD * (botsInvestedTotal / totalMedals);
         }
 
@@ -249,20 +266,15 @@ export default function App() {
         const taxRate = 0.1;
         const playerTax = playerReward * taxRate;
         const botTax = othersTotalReward * taxRate;
-        
         const playerNetReward = playerReward - playerTax;
         
         // 4. SEQUENTIAL EXECUTION OF BOT ACTIONS
-        // We simulate each bot acting one by one, affecting the temp state
-        
         let tempGlobal = { ...global };
         let tempAmm = { ...amm };
         let tempBots = [...bots];
         let tempPlayer = { ...player };
 
-        // Distribute Rewards to Bots first (Add to their MEME balance)
-        // NOTE: In this simplified demo, we assume bots invested ALL their medals yesterday.
-        // We need to calculate each bot's slice.
+        // Distribute Rewards to Bots first
         const yesterdayBotMedals = tempBots.reduce((sum, b) => sum + b.medals, 0);
         if (yesterdayBotMedals > 0) {
              tempBots.forEach(bot => {
@@ -270,15 +282,17 @@ export default function App() {
                  const gross = CONFIG.DAILY_MEME_REWARD * share;
                  const net = gross * 0.9;
                  bot.meme += net; 
-                 // Reset medals for today's new cycle (will be regenerated by chests)
                  bot.medals = 0;
              });
         }
 
-        // Shuffle actions to simulate random order of execution
+        // Shuffle actions
         const shuffledActions = [...botActions].sort(() => Math.random() - 0.5);
         
-        // Track aggregates for logging
+        // Logs for this specific turn
+        const currentDayBotLogs: BotDailyLog[] = [];
+
+        // Track aggregates
         let totalBotNewWealth = 0;
         let totalBotReservoirInput = 0;
         let totalBotChestCost = 0;
@@ -292,8 +306,18 @@ export default function App() {
             if (botIndex === -1) return;
             const bot = tempBots[botIndex];
 
+            // Snapshot for log
+            const startLvMON = bot.lvMON;
+            const startMeme = bot.meme;
+            const startWealth = bot.wealth;
+            const startStaked = bot.stakedMeme;
+            
+            let plannedStr = "";
+            let executionNotes = [];
+            
             // 1. Crafting
             if (action.craftCount > 0) {
+                plannedStr += `Craft:${action.craftCount} `;
                 const cost = action.craftCount * CONFIG.CRAFT_COST;
                 if (bot.lvMON >= cost) {
                     bot.lvMON -= cost;
@@ -309,74 +333,116 @@ export default function App() {
                     tempGlobal.reservoirLvMON += toReservoir;
                     totalBotReservoirInput += toReservoir;
 
-                    // Bonus Chests
                     const bonusChests = Math.floor(wealthGain / 100);
                     bot.chests += bonusChests;
+                    executionNotes.push("Craft:OK");
+                } else {
+                    executionNotes.push("Craft:Fail(Funds)");
                 }
             }
 
             // 2. Open Chests
-            if (action.openChests > 0 && bot.chests >= action.openChests) {
-                const cost = action.openChests * CONFIG.CHEST_OPEN_COST;
-                if (bot.lvMON >= cost) {
-                    bot.lvMON -= cost;
-                    bot.chests -= action.openChests;
-                    // Gain Medals
-                    let medalsWon = 0;
-                    for(let k=0; k<action.openChests; k++) medalsWon += Math.floor(Math.random() * (CONFIG.MEDAL_MAX - CONFIG.MEDAL_MIN + 1)) + CONFIG.MEDAL_MIN;
-                    bot.medals += medalsWon;
-                    
-                    tempGlobal.reservoirLvMON += cost;
-                    totalBotChestCost += cost;
-                    // We add to pool immediately for next day calculation? 
-                    // No, "Invest Medals" step comes next.
+            if (action.openChests > 0) {
+                plannedStr += `Open:${action.openChests} `;
+                if (bot.chests >= action.openChests) {
+                    const cost = action.openChests * CONFIG.CHEST_OPEN_COST;
+                    if (bot.lvMON >= cost) {
+                        bot.lvMON -= cost;
+                        bot.chests -= action.openChests;
+                        let medalsWon = 0;
+                        for(let k=0; k<action.openChests; k++) medalsWon += Math.floor(Math.random() * (CONFIG.MEDAL_MAX - CONFIG.MEDAL_MIN + 1)) + CONFIG.MEDAL_MIN;
+                        bot.medals += medalsWon;
+                        
+                        tempGlobal.reservoirLvMON += cost;
+                        totalBotChestCost += cost;
+                        executionNotes.push("Open:OK");
+                    } else {
+                        executionNotes.push("Open:Fail(Funds)");
+                    }
+                } else {
+                     executionNotes.push("Open:Fail(Chests)");
                 }
             }
 
-            // 3. Invest Medals (Simple boolean in action)
-            if (action.investMedals && bot.medals > 0) {
-                totalBotMedalsGenerated += bot.medals;
-                // Bot medals stay in 'medals' prop but count towards 'medalsInPool' global for TOMORROW's reward
+            // 3. Invest Medals
+            if (action.investMedals) {
+                plannedStr += `Invest:All `;
+                if (bot.medals > 0) {
+                    totalBotMedalsGenerated += bot.medals;
+                    executionNotes.push(`Invested:${bot.medals}`);
+                    // Note: bot.medals is not reset here, it stays until next morning reward distribution
+                } else {
+                    executionNotes.push("Invest:None");
+                }
             }
 
-            // 4. Unstake (Sell logic precursor)
-            if (action.unstakeMemePercent > 0 && bot.stakedMeme > 0) {
-                const amount = bot.stakedMeme * action.unstakeMemePercent;
-                bot.stakedMeme -= amount;
-                bot.meme += amount;
-                tempGlobal.totalStakedMeme = Math.max(0, tempGlobal.totalStakedMeme - amount);
-                totalBotMemeStakedDelta -= amount;
+            // 4. Unstake
+            if (action.unstakeMemePercent > 0) {
+                plannedStr += `Unstake:${(action.unstakeMemePercent*100).toFixed(0)}% `;
+                if (bot.stakedMeme > 0) {
+                    const amount = bot.stakedMeme * action.unstakeMemePercent;
+                    bot.stakedMeme -= amount;
+                    bot.meme += amount;
+                    tempGlobal.totalStakedMeme = Math.max(0, tempGlobal.totalStakedMeme - amount);
+                    totalBotMemeStakedDelta -= amount;
+                    executionNotes.push(`Unstaked:${formatNumber(amount)}`);
+                }
             }
 
-            // 5. Sell MEME (Market Impact!)
-            if (action.sellMemePercent > 0 && bot.meme > 0) {
-                const amountIn = Math.floor(bot.meme * action.sellMemePercent);
-                if (amountIn > 0) {
-                    // DYNAMIC PRICE IMPACT: Executing trade against tempAmm
-                    const amountOut = getAmountOut(amountIn, tempAmm.reserveMEME, tempAmm.reserveLvMON);
-                    tempAmm.reserveMEME += amountIn;
-                    tempAmm.reserveLvMON -= amountOut;
-                    
-                    bot.meme -= amountIn;
-                    bot.lvMON += amountOut;
-                    totalBotMemeSold += amountIn;
+            // 5. Sell MEME
+            if (action.sellMemePercent > 0) {
+                plannedStr += `Sell:${(action.sellMemePercent*100).toFixed(0)}% `;
+                if (bot.meme > 0) {
+                    const amountIn = Math.floor(bot.meme * action.sellMemePercent);
+                    if (amountIn > 0) {
+                        const amountOut = getAmountOut(amountIn, tempAmm.reserveMEME, tempAmm.reserveLvMON);
+                        tempAmm.reserveMEME += amountIn;
+                        tempAmm.reserveLvMON -= amountOut;
+                        
+                        bot.meme -= amountIn;
+                        bot.lvMON += amountOut;
+                        totalBotMemeSold += amountIn;
+                        executionNotes.push(`Sold:${formatNumber(amountIn)}`);
+                    }
                 }
             }
 
             // 6. Stake MEME
-            if (action.stakeMemePercent > 0 && bot.meme > 0) {
-                const amount = Math.floor(bot.meme * action.stakeMemePercent);
-                if (amount > 0) {
-                    bot.meme -= amount;
-                    bot.stakedMeme += amount;
-                    tempGlobal.totalStakedMeme += amount;
-                    totalBotMemeStakedDelta += amount;
+            if (action.stakeMemePercent > 0) {
+                 plannedStr += `Stake:${(action.stakeMemePercent*100).toFixed(0)}% `;
+                 if (bot.meme > 0) {
+                    const amount = Math.floor(bot.meme * action.stakeMemePercent);
+                    if (amount > 0) {
+                        bot.meme -= amount;
+                        bot.stakedMeme += amount;
+                        tempGlobal.totalStakedMeme += amount;
+                        totalBotMemeStakedDelta += amount;
+                        executionNotes.push(`Staked:${formatNumber(amount)}`);
+                    }
                 }
             }
+
+            // Create Log Entry
+            const logEntry: BotDailyLog = {
+                day: tempGlobal.day,
+                botId: bot.id,
+                personality: bot.personality,
+                marketPrice: currentPrice,
+                marketTrend: priceTrend,
+                rationale: action.rationale,
+                plannedActions: plannedStr,
+                executionNotes: executionNotes.join(', ') || "No Impact",
+                deltaLvMON: bot.lvMON - startLvMON,
+                deltaMeme: bot.meme - startMeme,
+                deltaWealth: bot.wealth - startWealth,
+                deltaStaked: bot.stakedMeme - startStaked,
+                finalLvMON: bot.lvMON,
+                finalMeme: bot.meme
+            };
+            currentDayBotLogs.push(logEntry);
         });
 
         // 5. SYSTEM BUYBACK & DIVIDENDS
-        // Calculated on the FINAL state of reservoir and wealth
         const currentBuybackRate = calculateBuybackRate(tempGlobal.dailyNewWealth);
         const buybackBudget = tempGlobal.reservoirLvMON * currentBuybackRate;
         
@@ -396,14 +462,7 @@ export default function App() {
         }
 
         // 6. PLAYER UPDATES
-        // Player Unclaimed Rewards update
-        // Pool Reward
         tempPlayer.unclaimedPoolReward += playerNetReward;
-        
-        // Redistribution (Tax from bots)
-        const totalUnclaimedPool = tempPlayer.unclaimedPoolReward + tempPlayer.unclaimedRedistribution + playerNetReward; // approximate weight
-        // Simplification: Player gets a slice of the tax based on... just being a player? 
-        // Let's give player a share of the tax based on their wealth vs total wealth
         const playerWealthShare = tempPlayer.wealth / (tempGlobal.totalWealth || 1);
         tempPlayer.unclaimedRedistribution += (botTax * playerWealthShare);
 
@@ -412,8 +471,6 @@ export default function App() {
             const playerStakingShare = stakingDividend * (tempPlayer.stakedMeme / tempGlobal.totalStakedMeme);
             tempPlayer.unclaimedStakingReward += playerStakingShare;
             
-            // Give bots their staking rewards too (added to staked balance or meme? let's add to meme)
-            // Bots share = 1 - playerShare
             const botStakingTotal = stakingDividend - playerStakingShare;
             if (botStakingTotal > 0) {
                  tempBots.forEach(b => {
@@ -426,10 +483,9 @@ export default function App() {
 
         const newChests = Math.floor(tempPlayer.wealth / 100);
         tempPlayer.chests += newChests;
-        tempPlayer.investedMedals = 0; // Reset for next day
+        tempPlayer.investedMedals = 0; 
 
         // 7. FINALIZE STATE
-        // Update History
         const log: DailyLog = {
             day: tempGlobal.day,
             memePrice: tempAmm.reserveLvMON / tempAmm.reserveMEME,
@@ -440,23 +496,22 @@ export default function App() {
             totalWealth: tempGlobal.totalWealth,
             newWealth: tempGlobal.dailyNewWealth,
             stakingApy: tempGlobal.totalStakedMeme > 0 ? (stakingDividend * 365 / tempGlobal.totalStakedMeme) : 0,
-            botActivity: shuffledActions.length / 10, // Rough metric
+            botActivity: shuffledActions.length / 10,
             botRoi: 0, 
             medalsInPool: tempGlobal.medalsInPool,
             aiAnalysis: marketAnalysisText
         };
 
         setHistory(prev => [...prev, log]);
+        setBotHistory(prev => [...prev, ...currentDayBotLogs]); // Append detail logs
         setAmm(tempAmm);
         setPlayer(tempPlayer);
         setBots(tempBots);
         setGlobal(prev => ({
             ...tempGlobal,
             day: prev.day + 1,
-            // Medals for tomorrow's pool = Player's invested (reset to 0 but tracked elsewhere) + Bots generated
-            // NOTE: In this loop we assumed bots put ALL generated medals into pool.
             medalsInPool: totalBotMedalsGenerated, 
-            dailyNewWealth: 0 // Reset daily counter for next day
+            dailyNewWealth: 0 
         }));
 
     } catch (e) {

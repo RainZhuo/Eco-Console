@@ -61,6 +61,34 @@ export interface DailyLog {
   aiAnalysis?: string; // AI Market Analysis text
 }
 
+// New: Detailed Bot Daily Log for Export
+export interface BotDailyLog {
+  day: number;
+  botId: number;
+  personality: string;
+  
+  // Market Context Snapshot
+  marketPrice: number;
+  marketTrend: string;
+
+  // Decision & Rationale
+  rationale: string;
+  plannedActions: string; // Summary of what they wanted to do
+  
+  // Execution Results
+  executionNotes: string; // "Success" or "Failed: Insufficient Funds"
+  
+  // Asset Deltas
+  deltaLvMON: number;
+  deltaMeme: number;
+  deltaWealth: number;
+  deltaStaked: number;
+  
+  // Final State
+  finalLvMON: number;
+  finalMeme: number;
+}
+
 // Config Constants
 export const CONFIG = {
   CRAFT_COST: 3000, // Updated per prompt request (was 300)
